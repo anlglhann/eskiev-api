@@ -5,6 +5,7 @@
 #include <cstdlib>
 
 static std::mutex g_fileMutex;
+
 static std::string data_path() {
     const char* p = std::getenv("DATA_PATH");
     return std::string(p ? p : "/var/data/reservations.csv");
@@ -34,33 +35,48 @@ static std::string csv_escape(const std::string& s) {
 int main() {
     crow::SimpleApp app;
 
-    auto add_cors = [](const crow::request& req, crow::response& res) {
+    // CORS helpers
+    auto add_cors_with_origin = [](const crow::request& req, crow::response& res) {
         std::string origin = req.get_header_value("Origin");
-        // Dev'de 127.0.0.1:5500 ve ileride Netlify domainin de buradan geçer.
-        // Origin varsa onu aynen yansıtıyoruz (Safari daha az sorun çıkarır).
         res.add_header("Access-Control-Allow-Origin", origin.empty() ? "*" : origin);
         res.add_header("Vary", "Origin");
         res.add_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
         res.add_header("Access-Control-Allow-Headers", "Content-Type");
     };
 
+    auto add_cors_any = [](crow::response& res) {
+        res.add_header("Access-Control-Allow-Origin", "*");
+        res.add_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+        res.add_header("Access-Control-Allow-Headers", "Content-Type");
+    };
+
+    // Health
     CROW_ROUTE(app, "/health").methods("GET"_method)
-    ([]{
-        crow::json::wvalue x;
-        x["ok"] = true;
-        return x;
-    });
-
-    CROW_ROUTE(app, "/reservations").methods("OPTIONS"_method)
-    ([&](const crow::request&, crow::response& res){
-        add_cors(req, res);
+    ([&](const crow::request& req){
+        crow::response res;
+        add_cors_with_origin(req, res);
         res.code = 200;
-        res.end();
+        res.set_header("Content-Type", "application/json");
+        res.write("{\"ok\":true}");
+        return res; // res.end() YOK
     });
+   
+  
 
+    // Preflight for reservations
+    CROW_ROUTE(app, "/reservations").methods("OPTIONS"_method)
+    ([&](const crow::request& req){
+        crow::response res;
+        add_cors_with_origin(req, res);
+        res.code = 200;
+        return res;
+    });
+   
+
+    // Create reservation
     CROW_ROUTE(app, "/reservations").methods("POST"_method)
     ([&](const crow::request& req, crow::response& res){
-        add_cors(req, res);
+        add_cors_with_origin(req, res);
 
         auto body = crow::json::load(req.body);
         if (!body) {
@@ -103,6 +119,15 @@ int main() {
         res.code = 200;
         res.write("{\"ok\":true}");
         return res.end();
+    });
+
+    // If you ever need a generic OPTIONS handler:
+    // (Not required, but shows how to use add_cors_any)
+    CROW_ROUTE(app, "/").methods("OPTIONS"_method)
+    ([&](crow::response& res){
+        add_cors_any(res);
+        res.code = 200;
+        res.end();
     });
 
     int port = 8080;
