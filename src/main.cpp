@@ -32,79 +32,60 @@ static std::string csv_escape(const std::string& s) {
     return out;
 }
 
-int main() {
-    crow::SimpleApp app;
+// --- CORS Middleware: Crow'un otomatik OPTIONS(204) cevabına bile header ekler ---
+struct Cors {
+    struct context {
+        std::string origin;
+    };
 
-    // CORS helpers
-    auto add_cors_with_origin = [](const crow::request& req, crow::response& res) {
-        std::string origin = req.get_header_value("Origin");
-        res.add_header("Access-Control-Allow-Origin", origin.empty() ? "*" : origin);
+    void before_handle(crow::request& req, crow::response& /*res*/, context& ctx) {
+        ctx.origin = req.get_header_value("Origin");
+    }
+
+    void after_handle(crow::request& req, crow::response& res, context& ctx) {
+        std::string origin = ctx.origin;
+        if (origin.empty()) origin = req.get_header_value("Origin");
+    
+        const std::string dev_origin = "http://127.0.0.1:5500";
+        if (!origin.empty()) res.add_header("Access-Control-Allow-Origin", origin);
+        else res.add_header("Access-Control-Allow-Origin", dev_origin);
+    
         res.add_header("Vary", "Origin");
         res.add_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
         res.add_header("Access-Control-Allow-Headers", "Content-Type");
-    };
+        res.add_header("Access-Control-Max-Age", "86400");
+    }
+};
 
-    auto add_cors_any = [](crow::response& res) {
-        res.add_header("Access-Control-Allow-Origin", "*");
-        res.add_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-        res.add_header("Access-Control-Allow-Headers", "Content-Type");
-    };
+int main() {
+    crow::App<Cors> app;
 
-    // Health
     CROW_ROUTE(app, "/health").methods("GET"_method)
-    ([&](const crow::request& req){
-        crow::response res;
-        add_cors_with_origin(req, res);
-        res.code = 200;
-        res.set_header("Content-Type", "application/json");
-        res.write("{\"ok\":true}");
-        return res; // res.end() YOK
+    ([]{
+        return crow::response{200, "{\"ok\":true}"};
     });
-   
-  
 
-    // Preflight for reservations
-    CROW_ROUTE(app, "/reservations").methods("OPTIONS"_method)
-    ([&](const crow::request& req){
-        crow::response res;
-        add_cors_with_origin(req, res);
-        res.code = 200;
-        return res;
-    });
-   
-
-    // Create reservation
     CROW_ROUTE(app, "/reservations").methods("POST"_method)
-    ([&](const crow::request& req, crow::response& res){
-        add_cors_with_origin(req, res);
-
+    ([](const crow::request& req){
         auto body = crow::json::load(req.body);
-        if (!body) {
-            res.code = 400;
-            res.write("{\"error\":\"invalid_json\"}");
-            return res.end();
-        }
+        if (!body) return crow::response{400, "{\"error\":\"invalid_json\"}"};
 
         auto get = [&](const char* k)->std::string{
             if (!body.has(k)) return "";
             return body[k].s();
         };
 
-        std::string name = get("name");
-        std::string phone = get("phone");
-        std::string date = get("date");
-        std::string time = get("time");
+        std::string name   = get("name");
+        std::string phone  = get("phone");
+        std::string date   = get("date");
+        std::string time   = get("time");
         std::string people = get("people");
-        std::string note = get("note");
+        std::string note   = get("note");
 
-        if (name.empty() || phone.empty() || date.empty() || time.empty() || people.empty()) {
-            res.code = 400;
-            res.write("{\"error\":\"missing_fields\"}");
-            return res.end();
-        }
+        if (name.empty() || phone.empty() || date.empty() || time.empty() || people.empty())
+            return crow::response{400, "{\"error\":\"missing_fields\"}"};
 
         ensure_csv_header();
-
         {
             std::lock_guard<std::mutex> lk(g_fileMutex);
             std::ofstream out(data_path(), std::ios::app);
@@ -116,18 +97,7 @@ int main() {
                 << csv_escape(note) << "\n";
         }
 
-        res.code = 200;
-        res.write("{\"ok\":true}");
-        return res.end();
-    });
-
-    // If you ever need a generic OPTIONS handler:
-    // (Not required, but shows how to use add_cors_any)
-    CROW_ROUTE(app, "/").methods("OPTIONS"_method)
-    ([&](crow::response& res){
-        add_cors_any(res);
-        res.code = 200;
-        res.end();
+        return crow::response{200, "{\"ok\":true}"};
     });
 
     int port = 8080;
