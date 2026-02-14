@@ -34,8 +34,12 @@ static std::string csv_escape(const std::string& s) {
 int main() {
     crow::SimpleApp app;
 
-    auto add_cors = [](crow::response& res) {
-        res.add_header("Access-Control-Allow-Origin", "*");
+    auto add_cors = [](const crow::request& req, crow::response& res) {
+        std::string origin = req.get_header_value("Origin");
+        // Dev'de 127.0.0.1:5500 ve ileride Netlify domainin de buradan geçer.
+        // Origin varsa onu aynen yansıtıyoruz (Safari daha az sorun çıkarır).
+        res.add_header("Access-Control-Allow-Origin", origin.empty() ? "*" : origin);
+        res.add_header("Vary", "Origin");
         res.add_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
         res.add_header("Access-Control-Allow-Headers", "Content-Type");
     };
@@ -49,14 +53,14 @@ int main() {
 
     CROW_ROUTE(app, "/reservations").methods("OPTIONS"_method)
     ([&](const crow::request&, crow::response& res){
-        add_cors(res);
-        res.code = 204;
+        add_cors(req, res);
+        res.code = 200;
         res.end();
     });
 
     CROW_ROUTE(app, "/reservations").methods("POST"_method)
     ([&](const crow::request& req, crow::response& res){
-        add_cors(res);
+        add_cors(req, res);
 
         auto body = crow::json::load(req.body);
         if (!body) {
