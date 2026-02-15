@@ -3,6 +3,8 @@
 #include <mutex>
 #include <string>
 #include <cstdlib>
+#include <sstream>
+#include <vector>
 
 static std::mutex g_fileMutex;
 
@@ -57,6 +59,47 @@ struct Cors {
     }
 };
 
+static std::string json_escape(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 8);
+    for (char c : s) {
+        switch (c) {
+            case '\\': out += "\\\\"; break;
+            case '"':  out += "\\\""; break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:   out.push_back(c); break;
+        }
+    }
+    return out;
+}
+
+static std::vector<std::string> parse_csv_line(const std::string& line) {
+    std::vector<std::string> out;
+    std::string cur;
+    bool in_quotes = false;
+
+    for (size_t i = 0; i < line.size(); i++) {
+        char c = line[i];
+        if (c == '"') {
+            if (in_quotes && i + 1 < line.size() && line[i + 1] == '"') {
+                cur.push_back('"');
+                i++;
+            } else {
+                in_quotes = !in_quotes;
+            }
+        } else if (c == ',' && !in_quotes) {
+            out.push_back(cur);
+            cur.clear();
+        } else {
+            cur.push_back(c);
+        }
+    }
+    out.push_back(cur);
+    return out;
+}
+
 int main() {
     crow::App<Cors> app;
 
@@ -99,6 +142,62 @@ int main() {
 
         return crow::response{200, "{\"ok\":true}"};
     });
+
+    CROW_ROUTE(app, "/admin/reservations").methods("GET"_method)
+([](const crow::request& req) {
+    const char* admin_key = std::getenv("ADMIN_KEY");
+    std::string key = req.url_params.get("key") ? req.url_params.get("key") : "";
+
+    if (!admin_key || key != admin_key) {
+        crow::response r;
+        r.code = 401;
+        r.set_header("Content-Type", "application/json");
+        r.write("{\"error\":\"unauthorized\"}");
+        return r;
+    }
+
+    std::ifstream in(data_path());
+    if (!in.good()) {
+        crow::response r;
+        r.code = 200;
+        r.set_header("Content-Type", "application/json");
+        r.write("[]");
+        return r;
+    }
+
+    std::string header;
+    std::getline(in, header); // ilk satır başlık
+
+    std::string line;
+    std::string json = "[";
+    bool first = true;
+
+    while (std::getline(in, line)) {
+        if (line.empty()) continue;
+        auto cols = parse_csv_line(line);
+        if (cols.size() < 6) continue;
+
+        if (!first) json += ",";
+        first = false;
+
+        json += "{";
+        json += "\"name\":\""   + json_escape(cols[0]) + "\",";
+        json += "\"phone\":\""  + json_escape(cols[1]) + "\",";
+        json += "\"date\":\""   + json_escape(cols[2]) + "\",";
+        json += "\"time\":\""   + json_escape(cols[3]) + "\",";
+        json += "\"people\":\"" + json_escape(cols[4]) + "\",";
+        json += "\"note\":\""   + json_escape(cols[5]) + "\"";
+        json += "}";
+    }
+
+    json += "]";
+
+    crow::response r;
+    r.code = 200;
+    r.set_header("Content-Type", "application/json");
+    r.write(json);
+    return r;
+});
 
     int port = 8080;
     if (const char* p = std::getenv("PORT")) port = std::atoi(p);
